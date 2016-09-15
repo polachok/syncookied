@@ -25,6 +25,9 @@ log = "0.3.6"
 syslog = "3.1.0"
 chrono = "0.2.22"
 
+[dependencies.tuntap]
+git = "https://github.com/polachok/tuntap"
+
 [dependencies.scheduler]
 git = "https://github.com/polachok/rust-scheduler"
 branch = "portability"

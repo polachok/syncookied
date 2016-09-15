@@ -18,6 +18,7 @@ extern crate pcap;
 extern crate bpfjit;
 extern crate chrono;
 extern crate influent;
+extern crate tuntap;
 extern crate concurrent_hash_map;
 
 use std::fmt;
@@ -30,6 +31,8 @@ use std::sync::atomic::{AtomicUsize};
 use std::sync::Arc;
 use std::net::Ipv4Addr;
 use pnet::util::MacAddr;
+use tuntap::{Tap,TunBuilder,MultiQueue};
+use tuntap::Queue as TapQueue;
 use parking_lot::{RwLock,Mutex,Condvar};
 use concurrent_hash_map::ConcurrentHashMap;
 
@@ -48,6 +51,7 @@ mod csum;
 mod util;
 mod tx;
 mod rx;
+mod fwd;
 mod uptime;
 mod config;
 mod filter;
@@ -505,8 +509,10 @@ fn run(config: PathBuf, rx_iface: &str, tx_iface: &str,
 
         scope.spawn(move || state_table_gc());
 
+        let tap = TunBuilder::with_name(&"cookie0").open_mq_tap().unwrap();
         // we spawn a thread per RX/TX queue
         for ring in 0..rx_count {
+            let tap = tap.open_queue().unwrap();
             let ring = ring;
             let (tx, rx) = spsc::make(qlen as usize);
             let (f_tx, f_rx) = spsc::make(qlen as usize);
@@ -557,6 +563,14 @@ fn run(config: PathBuf, rx_iface: &str, tx_iface: &str,
                     };
                     let cpu = first_cpu + ring as usize; /* we assume queues/rings are bound to cpus */
                     tx::Sender::new(ring, cpu, None, Some(f_rx), &mut ring_nm, pair, rx_mac.clone(), metrics_server).run();
+                });
+                None
+            } else if true /* TAP */ {
+                /* blah */
+                let pair = pair.clone();
+                let cpu = first_cpu + ring as usize; /* we assume queues/rings are bound to cpus */
+                scope.spawn(move || {
+                    fwd::TapForwarder::new(ring, cpu, f_rx, tap, pair, rx_mac.clone(), metrics_server);
                 });
                 None
             } else {
