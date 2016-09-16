@@ -38,7 +38,7 @@ impl RxStats {
 }
 
 pub struct Receiver<'a> {
-    cpu: usize,
+    cpu: u32,
     chan_reply: spsc::Producer<IngressPacket>,
     chan_fwd: spsc::Producer<ForwardedPacket>,
     netmap: &'a mut NetmapDescriptor,
@@ -67,7 +67,7 @@ fn adaptive_push<T>(chan: &spsc::Producer<T>, pkt: T, retries: usize) -> Option<
 
 
 impl<'a> Receiver<'a> {
-    pub fn new(ring_num: u16, cpu: usize,
+    pub fn new(ring_num: u16, cpu: u32,
                chan_fwd: spsc::Producer<ForwardedPacket>,
                chan_reply: spsc::Producer<IngressPacket>,
                netmap: &'a mut NetmapDescriptor,
@@ -91,41 +91,42 @@ impl<'a> Receiver<'a> {
         ::RoutingTable::sync_tables();
     }
 
-    fn update_dynamic_metrics(client: &metrics::Client, tags: &[(&str, &str)], seconds: u32) {
+    fn update_dynamic_metrics(cpu: u32, metric: &mpsc::Sender<metrics::Message>,
+                              seconds: u32, tags: &Vec<(String, String)>) {
         for ip in ::RoutingTable::get_ips() {
-            let ip_tag = format!("{}", ip);
-            let mut m = metrics::Metric::new_with_tags("rx_pps_ip", tags);
-            m.add_tag(("dest_ip", &ip_tag));
+            let mut tags = tags.clone();
+            tags.push(("dest_ip".to_string(), format!("{}", ip)));
+            let m = metrics::Message::register(cpu, ip.into(), "rx_pps_ip".to_string(), tags);
+            metric.send(m);
             ::RoutingTable::with_host_config_mut(ip, |hc| {
-                    m.set_value((hc.packets / seconds) as i64);
+                    let m = metrics::Message::point(cpu, 5, (hc.packets / seconds) as i64);
+                    metric.send(m);
                     hc.packets = 0;
             });
-            client.send(&[m]);
         }
     }
 
-    fn register_metrics(&mut self) {
+    fn get_default_tags(&self) -> Vec<(String,String)> {
         let hostname = util::get_host_name().unwrap();
         let queue = format!("{}", self.ring_num);
         let ifname = self.netmap.get_ifname();
-        let tags = vec![("queue".to_string(), queue), ("host".to_string(), hostname), ("iface".to_string(), ifname)];
+        vec![("queue".to_string(), queue), ("host".to_string(), hostname), ("iface".to_string(), ifname)]
+    }
+
+    fn register_metrics(&mut self, tags: &Vec<(String,String)>) {
         for (i, m) in metrics_names.iter().enumerate() {
-            let msg = metrics::Message::register(0, i as u32, m.to_string(), tags.clone());
+            let msg = metrics::Message::register(self.cpu, i as u32, m.to_string(), tags.clone());
             self.metrics.as_ref().map(|ref m| m.send(msg));
         }
     }
 
     // main RX loop
     pub fn run(mut self) {
-        if self.metrics.is_some() {
-            self.register_metrics();
-        }
-
         info!("RX loop for ring {:?}", self.ring_num);
         info!("Rx rings: {:?}", self.netmap.get_rx_rings());
         util::set_thread_name(&format!("syncookied/rx{:02}", self.ring_num));
 
-        util::set_cpu_prio(self.cpu, 20);
+        util::set_cpu_prio(self.cpu as usize, 20);
 
         /* wait for card to reinitialize */
         thread::sleep(Duration::new(1, self.ring_num as u32 * 100));
@@ -137,6 +138,11 @@ impl<'a> Receiver<'a> {
         let seconds: u32 = 5;
         let mut rate: u32 = 0;
         let ival = time::Duration::new(seconds as u64, 0);
+
+        let metrics_tags = self.get_default_tags();
+        if self.metrics.is_some() {
+            self.register_metrics(&metrics_tags);
+        }
 
         loop {
             if let Some(_) = self.netmap.poll(netmap::Direction::Input) {
@@ -203,23 +209,21 @@ impl<'a> Receiver<'a> {
                 }
             }
             if before.elapsed() >= ival {
-                if let Some(ref metrics_client) = self.metrics {
+                if let Some(ref metric) = self.metrics {
                     let stats = &self.stats;
                     let metrics = vec![
-                        metrics::Message::point(0, 0, (stats.received / seconds) as i64),
-                        metrics::Message::point(0, 1, (stats.dropped / seconds) as i64),
-                        metrics::Message::point(0, 2, (stats.forwarded / seconds) as i64),
-                        metrics::Message::point(0, 3, (stats.queued / seconds) as i64),
-                        metrics::Message::point(0, 4, (stats.overflow / seconds) as i64),
-                        metrics::Message::point(0, 5, (stats.failed / seconds) as i64),
+                        metrics::Message::point(self.cpu, 0, (stats.received / seconds) as i64),
+                        metrics::Message::point(self.cpu, 1, (stats.dropped / seconds) as i64),
+                        metrics::Message::point(self.cpu, 2, (stats.forwarded / seconds) as i64),
+                        metrics::Message::point(self.cpu, 3, (stats.queued / seconds) as i64),
+                        metrics::Message::point(self.cpu, 4, (stats.overflow / seconds) as i64),
+                        metrics::Message::point(self.cpu, 5, (stats.failed / seconds) as i64),
                     ];
                     for m in metrics.into_iter() {
-                        metrics_client.send(m);
+                        metric.send(m);
                     }
 
-                    //Self::update_metrics(stats, &mut metrics, seconds);
-                    //metrics_client.send(&metrics);
-                    //Self::update_dynamic_metrics(metrics_client, &tags, seconds);
+                    Self::update_dynamic_metrics(self.cpu, metric, seconds, &metrics_tags);
                 }
                 rate = self.stats.received/seconds;
                 debug!("[RX#{}]: received: {}Pkts/s, dropped: {}Pkts/s, forwarded: {}Pkts/s, queued: {}Pkts/s, overflowed: {}Pkts/s, failed: {}Pkts/s",

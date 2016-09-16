@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use ::influent;
 use influent::client::udp::UdpClient;
+use influent::client::Client;
 use influent::measurement::{Value,Measurement};
 use ::util;
 
@@ -54,7 +55,7 @@ impl Message {
 
 pub struct Collector<'a> {
     chan: mpsc::Receiver<Message>,
-    client: Client<'a>,
+    client: UdpClient<'a>,
     map: HashMap<(u32,u32),MetricSettings>,
 }
 
@@ -62,7 +63,7 @@ impl<'a> Collector<'a> {
     pub fn new(chan: mpsc::Receiver<Message>, metrics_server: &'a str) -> Self {
         Collector { 
             chan: chan,
-            client: Client::new(metrics_server),
+            client: influent::create_udp_client(vec![metrics_server]),
             map: HashMap::new(),
         }
     }
@@ -84,6 +85,13 @@ impl<'a> Collector<'a> {
                     match self.map.get(&(data.thread_id, data.metric_id)) {
                         Some(settings) => {
                             println!("Received value {} for {:?}", data.value, settings);
+                            let mut m = Measurement::new(&settings.name);
+
+                            for &(ref key, ref val) in settings.tags.iter() {
+                                m.add_tag(&key, &val);
+                            }
+                            m.add_field("value", Value::Integer(data.value));
+                            self.client.write_many(&[m], None);
                         },
                         None => {
                             error!("Unregistered metric: ({}, {})", data.thread_id, data.metric_id);
@@ -92,52 +100,5 @@ impl<'a> Collector<'a> {
                 },
             }
         }
-    }
-}
-
-pub struct Client<'a> {
-    inner: UdpClient<'a>,
-}
-
-impl<'a> Deref for Client<'a> {
-    type Target = UdpClient<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<'a> Client<'a> {
-    pub fn new(metrics_server: &'a str) -> Client<'a> {
-        Client { inner: influent::create_udp_client(vec![metrics_server]) }
-    }
-
-    pub fn send(&self, metrics: &[Metric]) {
-        use influent::client::Client;
-        use std::mem;
-        let _ = self.inner.write_many(unsafe { mem::transmute(metrics) }, None);
-    }
-}
-
-pub struct Metric<'a> {
-    inner: Measurement<'a>,
-}
-
-impl<'a> Metric<'a> {
-    pub fn new_with_tags(name: &'a str, tags: &'a [(&'a str, &'a str)]) -> Metric<'a> {
-        let mut m = Measurement::new(name);
-
-        for &(ref key, ref val) in tags {
-            m.add_tag(key, val);
-        }
-        Metric { inner: m }
-    }
-
-    pub fn add_tag(&mut self, tag: (&'a str, &'a str)) {
-        self.inner.add_tag(tag.0, tag.1);
-    }
-
-    pub fn set_value(&mut self, val: i64) {
-        self.inner.add_field("value", Value::Integer(val));
     }
 }
