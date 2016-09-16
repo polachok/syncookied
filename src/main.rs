@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::sync::atomic::{AtomicUsize};
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::net::Ipv4Addr;
 use pnet::util::MacAddr;
 use parking_lot::{RwLock,Mutex,Condvar};
@@ -505,6 +506,14 @@ fn run(config: PathBuf, rx_iface: &str, tx_iface: &str,
 
         scope.spawn(move || state_table_gc());
 
+        let metrics_tx = if let Some(addr) = metrics_server {
+            let (metrics_tx, metrics_rx) = mpsc::channel();
+            scope.spawn(move || metrics::Collector::new(metrics_rx, addr).run());
+            Some(metrics_tx)
+        } else {
+            None
+        };
+
         // we spawn a thread per RX/TX queue
         for ring in 0..rx_count {
             let ring = ring;
@@ -515,6 +524,7 @@ fn run(config: PathBuf, rx_iface: &str, tx_iface: &str,
 
             {
                 let rx_nm = rx_nm.clone();
+                let metrics_tx = metrics_tx.clone();
 
                 scope.spawn(move || {
                     info!("Starting RX thread for ring {} at {}", ring, rx_iface);
@@ -523,7 +533,7 @@ fn run(config: PathBuf, rx_iface: &str, tx_iface: &str,
                         nm.clone_ring(ring, Direction::Input).unwrap()
                     };
                     let cpu = first_cpu + ring as usize;
-                    rx::Receiver::new(ring, cpu, f_tx, tx, &mut ring_nm, rx_pair, rx_mac.clone(), metrics_server).run();
+                    rx::Receiver::new(ring, cpu, f_tx, tx, &mut ring_nm, rx_pair, rx_mac.clone(), metrics_tx).run();
                 });
             }
 
