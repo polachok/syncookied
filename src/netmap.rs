@@ -380,10 +380,8 @@ impl NetmapDescriptor {
         const IFNAMSIZ: usize = libc::IF_NAMESIZE;
         unsafe {
             let nifp = (*self.raw).nifp;
-            let mut buf = vec![0;IFNAMSIZ + 1];
-            libc::strncpy(buf.as_mut_ptr() as *mut libc::c_char, (*nifp).ni_name.as_ptr(), IFNAMSIZ);
-            let cstr = CString::from_vec_unchecked(buf);
-            cstr.into_string().unwrap()
+            let cstr = CStr::from_ptr((*nifp).ni_name.as_ptr());
+            cstr.to_owned().into_string().unwrap()
         }
     }
 
