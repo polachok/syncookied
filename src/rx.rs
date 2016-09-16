@@ -2,6 +2,7 @@
 use std::time::{self,Duration};
 use std::thread;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use ::netmap::{self, NetmapDescriptor, RxSlot};
 use ::ForwardedPacket;
@@ -12,6 +13,8 @@ use ::libc;
 use ::spsc;
 use ::packet::Action;
 use ::metrics;
+
+const metrics_names: [&'static str; 6] = [ "rx_pps", "rx_drop", "rx_forwarded", "rx_queued", "rx_overflow", "rx_failed", ];
 
 #[derive(Debug,Default)]
 struct RxStats {
@@ -43,7 +46,7 @@ pub struct Receiver<'a> {
     lock: Arc<AtomicUsize>,
     mac: MacAddr,
     ring_num: u16,
-    metrics_addr: Option<&'a str>,
+    metrics: Option<mpsc::Sender<metrics::Message>>,
 }
 
 #[inline(always)]
@@ -70,7 +73,7 @@ impl<'a> Receiver<'a> {
                netmap: &'a mut NetmapDescriptor,
                lock: Arc<AtomicUsize>,
                mac: MacAddr,
-               metrics_addr: Option<&'a str>) -> Self {
+               metrics: Option<mpsc::Sender<metrics::Message>>) -> Self {
         Receiver {
             ring_num: ring_num,
             cpu: cpu,
@@ -80,33 +83,12 @@ impl<'a> Receiver<'a> {
             lock: lock,
             stats: RxStats::empty(),
             mac: mac,
-            metrics_addr: metrics_addr,
+            metrics: metrics,
         }
     }
 
     fn update_routing_cache(&mut self) {
         ::RoutingTable::sync_tables();
-    }
-
-    fn make_metrics<'t>(tags: &'t [(&'t str, &'t str)]) -> [metrics::Metric<'t>;6] {
-        use metrics::Metric;
-        [
-            Metric::new_with_tags("rx_pps", tags),
-            Metric::new_with_tags("rx_drop", tags),
-            Metric::new_with_tags("rx_forwarded", tags),
-            Metric::new_with_tags("rx_queued", tags),
-            Metric::new_with_tags("rx_overflow", tags),
-            Metric::new_with_tags("rx_failed", tags),
-        ]
-    }
-
-    fn update_metrics<'t>(stats: &'t RxStats, metrics: &mut [metrics::Metric<'a>;6], seconds: u32) {
-        metrics[0].set_value((stats.received / seconds) as i64);
-        metrics[1].set_value((stats.dropped / seconds) as i64);
-        metrics[2].set_value((stats.forwarded / seconds) as i64);
-        metrics[3].set_value((stats.queued / seconds) as i64);
-        metrics[4].set_value((stats.overflow / seconds) as i64);
-        metrics[5].set_value((stats.failed / seconds) as i64);
     }
 
     fn update_dynamic_metrics(client: &metrics::Client, tags: &[(&str, &str)], seconds: u32) {
@@ -122,14 +104,22 @@ impl<'a> Receiver<'a> {
         }
     }
 
-    // main RX loop
-    pub fn run(mut self) {
-        let metrics_client = self.metrics_addr.map(metrics::Client::new);
+    fn register_metrics(&mut self) {
         let hostname = util::get_host_name().unwrap();
         let queue = format!("{}", self.ring_num);
         let ifname = self.netmap.get_ifname();
-        let tags = [("queue", queue.as_str()), ("host", hostname.as_str()), ("iface", ifname.as_str())];
-        let mut metrics = Self::make_metrics(&tags[..]);
+        let tags = vec![("queue".to_string(), queue), ("host".to_string(), hostname), ("iface".to_string(), ifname)];
+        for (i, m) in metrics_names.iter().enumerate() {
+            let msg = metrics::Message::register(0, i as u32, m.to_string(), tags.clone());
+            self.metrics.as_ref().map(|ref m| m.send(msg));
+        }
+    }
+
+    // main RX loop
+    pub fn run(mut self) {
+        if self.metrics.is_some() {
+            self.register_metrics();
+        }
 
         info!("RX loop for ring {:?}", self.ring_num);
         info!("Rx rings: {:?}", self.netmap.get_rx_rings());
@@ -213,11 +203,23 @@ impl<'a> Receiver<'a> {
                 }
             }
             if before.elapsed() >= ival {
-                if let Some(ref metrics_client) = metrics_client {
+                if let Some(ref metrics_client) = self.metrics {
                     let stats = &self.stats;
-                    Self::update_metrics(stats, &mut metrics, seconds);
-                    metrics_client.send(&metrics);
-                    Self::update_dynamic_metrics(metrics_client, &tags, seconds);
+                    let metrics = vec![
+                        metrics::Message::point(0, 0, (stats.received / seconds) as i64),
+                        metrics::Message::point(0, 1, (stats.dropped / seconds) as i64),
+                        metrics::Message::point(0, 2, (stats.forwarded / seconds) as i64),
+                        metrics::Message::point(0, 3, (stats.queued / seconds) as i64),
+                        metrics::Message::point(0, 4, (stats.overflow / seconds) as i64),
+                        metrics::Message::point(0, 5, (stats.failed / seconds) as i64),
+                    ];
+                    for m in metrics.into_iter() {
+                        metrics_client.send(m);
+                    }
+
+                    //Self::update_metrics(stats, &mut metrics, seconds);
+                    //metrics_client.send(&metrics);
+                    //Self::update_dynamic_metrics(metrics_client, &tags, seconds);
                 }
                 rate = self.stats.received/seconds;
                 debug!("[RX#{}]: received: {}Pkts/s, dropped: {}Pkts/s, forwarded: {}Pkts/s, queued: {}Pkts/s, overflowed: {}Pkts/s, failed: {}Pkts/s",
