@@ -274,6 +274,12 @@ fn handle_tcp_packet(packet: &[u8], fwd_mac: &MacAddr, pkt: &mut IngressPacket) 
         //println!("TCP Packet: {}:{} > {}:{}; length: {}", source,
         //            tcp.get_source(), destination, tcp.get_destination(), packet.len());
         let flags = tcp.get_flags();
+        let ip_daddr = pkt.ipv4_destination;
+        let tcp_daddr = tcp.get_destination();
+
+        ::RoutingTable::with_host_config_mut(ip_daddr, |hc| {
+            hc.packets_per_port[tcp_daddr as usize] += 1;
+        });
 
         if flags & (TcpFlags::SYN | TcpFlags::ACK) == TcpFlags::SYN {
             return handle_tcp_syn(tcp, pkt);

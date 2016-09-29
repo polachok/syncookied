@@ -276,6 +276,7 @@ pub struct HostConfiguration {
     default: filter::FilterAction,
     passthrough: bool,
     packets: u32,
+    packets_per_port: Vec<u32>,
 }
 
 impl HostConfiguration {
@@ -291,6 +292,7 @@ impl HostConfiguration {
             default: default,
             passthrough: pt,
             packets: 0,
+            packets_per_port: vec![0;65536],
         }
     }
 
@@ -305,6 +307,7 @@ impl HostConfiguration {
         self.passthrough = other.passthrough;
         // skip copying state_table
         self.packets = other.packets;
+        self.packets_per_port = other.packets_per_port.clone();
     }
 }
 
@@ -321,6 +324,7 @@ impl Clone for HostConfiguration {
             default: self.default,
             passthrough: self.passthrough,
             packets: self.packets,
+            packets_per_port: self.packets_per_port.clone(),
         }
     }
 }

@@ -115,12 +115,26 @@ impl<'a> Receiver<'a> {
         for ip in ::RoutingTable::get_ips() {
             let ip_tag = format!("{}", ip);
             let mut m = metrics::Metric::new_with_tags("rx_pps_ip", tags);
-            m.add_tag(("dest_ip", ip_tag));
+            m.add_tag(("dest_ip", ip_tag.clone()));
             ::RoutingTable::with_host_config_mut(ip, |hc| {
                     m.set_value((hc.packets / seconds) as i64);
                     hc.packets = 0;
             });
             chan.send(m);
+            for i in 0..65535 {
+                let mut m = metrics::Metric::new_with_tags("rx_pps_ip_port", tags);
+                m.add_tag(("dest_ip", ip_tag.clone()));
+                m.add_tag(("dest_port", i.to_string()));
+
+                ::RoutingTable::with_host_config_mut(ip, |hc| {
+                        let val = hc.packets_per_port[i];
+                        if val > 0 {
+                            m.set_value((val / seconds) as i64);
+                            hc.packets_per_port[i] = 0;
+                        }
+                });
+                chan.send(m);
+            }
         }
     }
 
