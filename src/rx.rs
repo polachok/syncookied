@@ -44,7 +44,7 @@ pub struct Receiver<'a> {
     lock: Arc<AtomicUsize>,
     mac: MacAddr,
     ring_num: u16,
-    metrics: Option<mpsc::Sender<metrics::Metric>>,
+    metrics: Option<metrics::Client>,
 }
 
 #[inline(always)]
@@ -71,7 +71,7 @@ impl<'a> Receiver<'a> {
                netmap: &'a mut NetmapDescriptor,
                lock: Arc<AtomicUsize>,
                mac: MacAddr,
-               metrics: Option<mpsc::Sender<metrics::Metric>>) -> Self {
+               metrics: Option<mpsc::Sender<metrics::Message>>) -> Self {
         Receiver {
             ring_num: ring_num,
             cpu: cpu,
@@ -81,7 +81,7 @@ impl<'a> Receiver<'a> {
             lock: lock,
             stats: RxStats::empty(),
             mac: mac,
-            metrics: metrics,
+            metrics: metrics.map(metrics::Client::new),
         }
     }
 
@@ -89,10 +89,10 @@ impl<'a> Receiver<'a> {
         ::RoutingTable::sync_tables();
     }
 
-    fn send_metrics(chan: &mpsc::Sender<metrics::Metric>,
+    fn send_metrics(chan: &mut metrics::Client,
                     stats: &RxStats, seconds: u32,
                     tags: &[(&'static str, String)]) {
-        
+      
         let mut ms = vec![
             metrics::Metric::new_with_tags("rx_pps", tags),
             metrics::Metric::new_with_tags("rx_drop", tags),
@@ -127,9 +127,9 @@ impl<'a> Receiver<'a> {
                 m.add_tag(("dest_port", i.to_string()));
 
                 ::RoutingTable::with_host_config_mut(ip, |hc| {
-                        let val = hc.packets_per_port[i];
+                        let val = (hc.packets_per_port[i] / seconds) as i64;
                         if val > 0 {
-                            m.set_value((val / seconds) as i64);
+                            m.set_value(val);
                             hc.packets_per_port[i] = 0;
                         }
                 });
@@ -227,7 +227,7 @@ impl<'a> Receiver<'a> {
                 }
             }
             if before.elapsed() >= ival {
-                if let Some(ref metrics_chan) = self.metrics {
+                if let Some(ref mut metrics_chan) = self.metrics {
                     let stats = &self.stats;
                     Self::send_metrics(metrics_chan, &stats, seconds, &tags[..]);
                 }

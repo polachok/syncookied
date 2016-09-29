@@ -1,20 +1,108 @@
 use std::ops::Deref;
 use std::sync::mpsc;
+use std::collections::HashMap;
 use ::influent;
 use influent::client::udp::UdpClient;
 use influent::measurement::{Value,Measurement};
 use ::util;
+use ::uuid::Uuid;
+use std::hash::{Hash, SipHasher, Hasher};
+
+pub struct Client {
+    chan: mpsc::Sender<Message>,
+    map: HashMap<u64, Uuid>
+}
+
+impl Client {
+    pub fn new(chan: mpsc::Sender<Message>) -> Self {
+        Client {
+            chan: chan,
+            map: HashMap::new(),
+        }
+    }
+
+    fn hash_metric(metric: &Metric) -> u64 {
+        let mut s = SipHasher::new();
+        let name = metric.inner.key;
+        name.hash(&mut s);
+        for tag in metric.inner.tags.iter() {
+            tag.hash(&mut s);
+        }
+        s.finish()
+    }
+
+    pub fn send(&mut self, metric: Metric) {
+        let chan = &self.chan;
+        let h = Self::hash_metric(&metric);
+        let val = match metric.inner.fields.get("value").unwrap() {
+            &Value::Integer(i) => i,
+            _ => panic!("shouldn't be possible"),
+        };
+
+        let id = self.map.entry(h).or_insert_with(|| {
+            let mut tags = Vec::new();
+            let name = metric.inner.key;
+            for (name, val) in metric.inner.tags.iter() {
+                tags.push((*name, val.to_owned()));
+            }
+            let m = Message::register(name, tags);
+            let id = m.id();
+            chan.send(m);
+            id
+        });
+        chan.send(Message::point(id.to_owned(), val));
+    }
+/*
+    pub fn send(&mut self, name: &'static str, tags: &[(&'static str, String)], val: i64) {
+        let tags1 = tags.clone();
+        let chan = &self.chan;
+        let id = self.map.entry((name, tags)).or_insert_with(|| {
+                let m = Message::register(name, tags1);
+                let id = m.id();
+                chan.send(m);
+                id
+        });
+        chan.send(Message::point(id.to_owned(), val));
+    }
+*/
+}
+
+#[derive(Debug)]
+pub enum Message {
+    Register(Uuid, &'static str, Vec<(&'static str, String)>),
+    Point(Uuid, i64),
+}
+
+impl Message {
+    fn register(name: &'static str, tags: Vec<(&'static str, String)>) -> Message {
+        let uuid = Uuid::new_v4();
+        Message::Register(uuid, name, tags)
+    }
+
+    fn point(id: Uuid, val: i64) -> Message {
+        Message::Point(id, val)
+    }
+
+    pub fn id(&self) -> Uuid {
+        match self {
+            &Message::Register(uuid, _, _) => uuid,
+            &Message::Point(uuid, _) => uuid,
+        }
+    }
+}
 
 pub struct Collector<'a> {
-    chan: mpsc::Receiver<Metric>,
-    client: Client<'a>,
+    chan: mpsc::Receiver<Message>,
+    client: InfluxClient<'a>,
+    map: HashMap<Uuid, (&'static str, Vec<(&'static str, String)>)>,
 }
 
 impl<'a> Collector<'a> {
-    pub fn new(chan: mpsc::Receiver<Metric>, metrics_server: &'a str) -> Self {
+    pub fn new(chan: mpsc::Receiver<Message>, metrics_server: &'a str) -> Self {
         Collector { 
             chan: chan,
-            client: Client::new(metrics_server),
+            client: InfluxClient::new(metrics_server),
+            map: HashMap::new(),
         }
     }
 
@@ -22,16 +110,30 @@ impl<'a> Collector<'a> {
         info!("Metrics collector starting");
         util::set_thread_name(&format!("syncookied/met"));
         for msg in self.chan.iter() {
-            self.client.send(msg);
+            match msg {
+                Message::Register(id, name, tags) => {
+                    self.map.insert(id, (name, tags));
+                },
+                Message::Point(id, val) => {
+                    match self.map.get(&id) {
+                        Some(&(name, ref tags)) => {
+                            let mut m = Metric::new_with_tags(name, &tags);
+                            m.set_value(val);
+                            self.client.send(m);
+                        },
+                        None => error!("unregistered metric"),
+                    }
+                },
+            }
         }
     }
 }
 
-pub struct Client<'a> {
+pub struct InfluxClient<'a> {
     inner: UdpClient<'a,String>,
 }
 
-impl<'a> Deref for Client<'a> {
+impl<'a> Deref for InfluxClient<'a> {
     type Target = UdpClient<'a,String>;
 
     fn deref(&self) -> &Self::Target {
@@ -39,14 +141,13 @@ impl<'a> Deref for Client<'a> {
     }
 }
 
-impl<'a> Client<'a> {
-    pub fn new(metrics_server: &'a str) -> Client<'a> {
-        Client { inner: influent::create_udp_client(vec![metrics_server]) }
+impl<'a> InfluxClient<'a> {
+    pub fn new(metrics_server: &'a str) -> InfluxClient<'a> {
+        InfluxClient { inner: influent::create_udp_client(vec![metrics_server]) }
     }
 
     pub fn send(&self, metric: Metric) {
         use influent::client::Client;
-        use std::mem;
         let _ = self.inner.write_one(metric.inner, None);
     }
 }

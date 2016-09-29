@@ -39,7 +39,7 @@ pub struct Sender<'a> {
     lock: Arc<AtomicUsize>,
     source_mac: MacAddr,
     stats: TxStats,
-    metrics: Option<mpsc::Sender<metrics::Metric>>,
+    metrics: Option<metrics::Client>,
 }
 
 impl<'a> Sender<'a> {
@@ -49,7 +49,7 @@ impl<'a> Sender<'a> {
                netmap: &'a mut NetmapDescriptor,
                lock: Arc<AtomicUsize>,
                source_mac: MacAddr,
-               metrics: Option<mpsc::Sender<metrics::Metric>>) -> Sender<'a> {
+               metrics: Option<mpsc::Sender<metrics::Message>>) -> Sender<'a> {
         Sender {
             ring_num: ring_num,
             cpu: cpu,
@@ -59,11 +59,11 @@ impl<'a> Sender<'a> {
             lock: lock,
             source_mac: source_mac,
             stats: TxStats::empty(),
-            metrics: metrics,
+            metrics: metrics.map(metrics::Client::new),
         }
     }
 
-    fn send_metrics(chan: &mpsc::Sender<metrics::Metric>,
+    fn send_metrics(chan: &mut metrics::Client,
                     stats: &TxStats, seconds: u32,
                     tags: &[(&'static str, String)]) {
         let mut ms = vec![
@@ -190,7 +190,7 @@ impl<'a> Sender<'a> {
                 }
             }
             if before.elapsed() >= ival {
-                if let Some(ref metrics) = self.metrics {
+                if let Some(ref mut metrics) = self.metrics {
                     let stats = &self.stats;
                     Self::send_metrics(metrics, stats, seconds, &tags);
                 }

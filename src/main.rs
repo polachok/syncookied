@@ -20,6 +20,7 @@ extern crate chrono;
 extern crate influent;
 extern crate concurrent_hash_map;
 extern crate url;
+extern crate uuid;
 
 use std::fmt;
 use std::str::FromStr;
