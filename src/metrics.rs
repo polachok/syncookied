@@ -22,8 +22,7 @@ impl<'a> Collector<'a> {
         info!("Metrics collector starting");
         util::set_thread_name(&format!("syncookied/met"));
         for msg in self.chan.iter() {
-            println!("{:?}", msg);
-            self.client.send(&[msg]);
+            self.client.send(msg);
         }
     }
 }
@@ -45,10 +44,10 @@ impl<'a> Client<'a> {
         Client { inner: influent::create_udp_client(vec![metrics_server]) }
     }
 
-    pub fn send(&self, metrics: &[Metric]) {
+    pub fn send(&self, metric: Metric) {
         use influent::client::Client;
         use std::mem;
-        let _ = self.inner.write_many(unsafe { mem::transmute(metrics) }, None);
+        let _ = self.inner.write_one(metric.inner, None);
     }
 }
 
