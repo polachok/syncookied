@@ -62,7 +62,7 @@ impl<'a> Sender<'a> {
         }
     }
 
-    fn make_metrics<'t>(tags: &'t [(&'t str, &'t str)]) -> [metrics::Metric<'t>;2] {
+    fn make_metrics<'t>(tags: &'t [(&'static str, String)]) -> [metrics::Metric;2] {
         use metrics::Metric;
         [
             Metric::new_with_tags("tx_pps", tags),
@@ -70,7 +70,7 @@ impl<'a> Sender<'a> {
         ]
     }
 
-    fn update_metrics<'t>(stats: &'t TxStats, metrics: &mut [metrics::Metric<'a>;2], seconds: u32) {
+    fn update_metrics<'t>(stats: &'t TxStats, metrics: &mut [metrics::Metric;2], seconds: u32) {
         metrics[0].set_value((stats.sent / seconds) as i64);
         metrics[1].set_value((stats.failed / seconds) as i64);
     }
@@ -82,7 +82,7 @@ impl<'a> Sender<'a> {
         let hostname = util::get_host_name().unwrap();
         let queue = format!("{}", self.ring_num);
         let ifname = self.netmap.get_ifname();
-        let tags = [("queue", queue.as_str()), ("host", hostname.as_str()), ("iface", ifname.as_str())];
+        let tags = [("queue", queue), ("host", hostname), ("iface", ifname)];
         let mut metrics = Self::make_metrics(&tags[..]);
 
         util::set_thread_name(&format!("syncookied/tx{:02}", self.ring_num));

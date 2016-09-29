@@ -33,7 +33,7 @@ branch = "portability"
 
 [dependencies.influent]
 git = "https://github.com/polachok/influent.rs"
-branch = "udp+"
+branch = "clean"
 default-features = false
 features = []
 
