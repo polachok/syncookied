@@ -3,6 +3,7 @@ use std::mem;
 use std::time::{self,Duration};
 use std::thread;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use ::netmap::{self, NetmapDescriptor, TxSlot, NetmapSlot};
 use ::packet::{self, IngressPacket};
@@ -38,7 +39,7 @@ pub struct Sender<'a> {
     lock: Arc<AtomicUsize>,
     source_mac: MacAddr,
     stats: TxStats,
-    metrics_addr: Option<&'a str>,
+    metrics: Option<mpsc::Sender<metrics::Metric>>,
 }
 
 impl<'a> Sender<'a> {
@@ -48,7 +49,7 @@ impl<'a> Sender<'a> {
                netmap: &'a mut NetmapDescriptor,
                lock: Arc<AtomicUsize>,
                source_mac: MacAddr,
-               metrics_addr: Option<&'a str>) -> Sender<'a> {
+               metrics: Option<mpsc::Sender<metrics::Metric>>) -> Sender<'a> {
         Sender {
             ring_num: ring_num,
             cpu: cpu,
@@ -58,35 +59,33 @@ impl<'a> Sender<'a> {
             lock: lock,
             source_mac: source_mac,
             stats: TxStats::empty(),
-            metrics_addr: metrics_addr,
+            metrics: metrics,
         }
     }
 
-    fn make_metrics<'t>(tags: &'t [(&'static str, String)]) -> [metrics::Metric;2] {
-        use metrics::Metric;
-        [
-            Metric::new_with_tags("tx_pps", tags),
-            Metric::new_with_tags("tx_failed", tags),
-        ]
-    }
-
-    fn update_metrics<'t>(stats: &'t TxStats, metrics: &mut [metrics::Metric;2], seconds: u32) {
-        metrics[0].set_value((stats.sent / seconds) as i64);
-        metrics[1].set_value((stats.failed / seconds) as i64);
+    fn send_metrics(chan: &mpsc::Sender<metrics::Metric>,
+                    stats: &TxStats, seconds: u32,
+                    tags: &[(&'static str, String)]) {
+        let mut ms = vec![
+            metrics::Metric::new_with_tags("tx_pps", tags),
+            metrics::Metric::new_with_tags("tx_failed", tags),
+        ];
+        ms[0].set_value((stats.sent / seconds) as i64);
+        ms[1].set_value((stats.failed / seconds) as i64);
+        for m in ms.into_iter() {
+            chan.send(m);
+        }
     }
 
     // main transfer loop
     pub fn run(mut self) {
         info!("TX loop for ring {:?} starting. Rings: {:?}", self.ring_num, self.netmap.get_tx_rings());
-        let metrics_client = self.metrics_addr.map(metrics::Client::new);
         let hostname = util::get_host_name().unwrap();
         let queue = format!("{}", self.ring_num);
         let ifname = self.netmap.get_ifname();
         let tags = [("queue", queue), ("host", hostname), ("iface", ifname)];
-        let mut metrics = Self::make_metrics(&tags[..]);
 
         util::set_thread_name(&format!("syncookied/tx{:02}", self.ring_num));
-
         util::set_cpu_prio(self.cpu, 20);
 
         /* wait for card to reinitialize */
@@ -191,10 +190,9 @@ impl<'a> Sender<'a> {
                 }
             }
             if before.elapsed() >= ival {
-                if let Some(ref metrics_client) = metrics_client {
+                if let Some(ref metrics) = self.metrics {
                     let stats = &self.stats;
-                    Self::update_metrics(stats, &mut metrics, seconds);
-                    metrics_client.send(&metrics);
+                    Self::send_metrics(metrics, stats, seconds, &tags);
                 }
                 rate = self.stats.sent/seconds;
                 debug!("[TX#{}]: sent {}Pkts/s, failed {}Pkts/s", self.ring_num, rate, self.stats.failed/seconds);
