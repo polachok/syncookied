@@ -121,19 +121,24 @@ impl<'a> Receiver<'a> {
                     hc.packets = 0;
             });
             chan.send(m);
+
             for i in 0..65535 {
                 let mut m = metrics::Metric::new_with_tags("rx_pps_ip_port", tags);
-                m.add_tag(("dest_ip", ip_tag.clone()));
-                m.add_tag(("dest_port", i.to_string()));
 
+                let mut send = false;
                 ::RoutingTable::with_host_config_mut(ip, |hc| {
                         let val = (hc.packets_per_port[i] / seconds) as i64;
                         if val > 0 {
                             m.set_value(val);
                             hc.packets_per_port[i] = 0;
+                            send = true;
                         }
                 });
-                chan.send(m);
+                if send {
+                    m.add_tag(("dest_ip", ip_tag.clone()));
+                    m.add_tag(("dest_port", i.to_string()));
+                    chan.send(m);
+                }
             }
         }
     }
