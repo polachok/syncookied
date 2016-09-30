@@ -38,6 +38,10 @@ impl Client {
             &Value::Integer(i) => i,
             _ => panic!("shouldn't be possible"),
         };
+        let val2 = match metric.inner.fields.get("value2") {
+            Some(&Value::Integer(i)) => Some(i),
+            _ => panic!("shouldn't be possible"),
+        };
 
         let id = self.map.entry(h).or_insert_with(|| {
             let mut tags = Vec::new();
@@ -50,14 +54,14 @@ impl Client {
             chan.send(m);
             id
         });
-        chan.send(Message::point(id.to_owned(), val));
+        chan.send(Message::point(id.to_owned(), val, val2));
     }
 }
 
 #[derive(Debug)]
 pub enum Message {
     Register(Uuid, &'static str, Vec<(&'static str, String)>),
-    Point(Uuid, i64),
+    Point(Uuid, i64, Option<i64>),
 }
 
 impl Message {
@@ -66,14 +70,14 @@ impl Message {
         Message::Register(uuid, name, tags)
     }
 
-    fn point(id: Uuid, val: i64) -> Message {
-        Message::Point(id, val)
+    fn point(id: Uuid, val: i64, val2: Option<i64>) -> Message {
+        Message::Point(id, val, val2)
     }
 
     pub fn id(&self) -> Uuid {
         match self {
             &Message::Register(uuid, _, _) => uuid,
-            &Message::Point(uuid, _) => uuid,
+            &Message::Point(uuid, _, _) => uuid,
         }
     }
 }
@@ -96,16 +100,20 @@ impl<'a> Collector<'a> {
     pub fn run(&mut self) {
         info!("Metrics collector starting");
         util::set_thread_name(&format!("syncookied/met"));
+
         for msg in self.chan.iter() {
             match msg {
                 Message::Register(id, name, tags) => {
                     self.map.insert(id, (name, tags));
                 },
-                Message::Point(id, val) => {
+                Message::Point(id, val, val2) => {
                     match self.map.get(&id) {
                         Some(&(name, ref tags)) => {
                             let mut m = Metric::new_with_tags(name, &tags);
                             m.set_value(val);
+                            if let Some(val2) = val2 {
+                                m.set_field("value2", val2);
+                            }
                             self.client.send(m);
                         },
                         None => error!("unregistered metric"),
@@ -158,7 +166,11 @@ impl Metric {
         self.inner.add_tag(tag.0, tag.1);
     }
 
+    pub fn set_field(&mut self, name: &'static str, val: i64) {
+        self.inner.add_field(name, Value::Integer(val));
+    }
+
     pub fn set_value(&mut self, val: i64) {
-        self.inner.add_field("value", Value::Integer(val));
+        self.set_field("value", val);
     }
 }

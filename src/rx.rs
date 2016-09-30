@@ -136,7 +136,7 @@ impl<'a> Receiver<'a> {
                 });
                 if send {
                     m.add_tag(("dest_ip", ip_tag.clone()));
-                    m.add_tag(("dest_port", i.to_string()));
+                    m.set_field("value2", i as i64);
                     chan.send(m);
                 }
             }
