@@ -40,7 +40,7 @@ impl Client {
         };
         let val2 = match metric.inner.fields.get("value2") {
             Some(&Value::Integer(i)) => Some(i),
-            _ => panic!("shouldn't be possible"),
+            _ => None,
         };
 
         let id = self.map.entry(h).or_insert_with(|| {
