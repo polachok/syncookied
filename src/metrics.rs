@@ -52,19 +52,6 @@ impl Client {
         });
         chan.send(Message::point(id.to_owned(), val));
     }
-/*
-    pub fn send(&mut self, name: &'static str, tags: &[(&'static str, String)], val: i64) {
-        let tags1 = tags.clone();
-        let chan = &self.chan;
-        let id = self.map.entry((name, tags)).or_insert_with(|| {
-                let m = Message::register(name, tags1);
-                let id = m.id();
-                chan.send(m);
-                id
-        });
-        chan.send(Message::point(id.to_owned(), val));
-    }
-*/
 }
 
 #[derive(Debug)]

@@ -306,9 +306,7 @@ impl HostConfiguration {
         self.filters = other.filters.clone();
         self.default = other.default;
         self.passthrough = other.passthrough;
-        // skip copying state_table
-        self.packets = other.packets;
-        self.packets_per_port = other.packets_per_port.clone();
+        // skip copying state
     }
 }
 
