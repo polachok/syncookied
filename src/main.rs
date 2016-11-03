@@ -74,7 +74,7 @@ thread_local!(pub static LOCAL_ROUTING_TABLE: RefCell<BTreeMap<Ipv4Addr, HostCon
 
 #[derive(Clone)]
 struct StateTable {
-    map: ConcurrentHashMap<usize,usize, BuildHasherDefault<fnv::FnvHasher>>,
+    map: ConcurrentHashMap<u64,u64,BuildHasherDefault<fnv::FnvHasher>>,
 }
 
 impl fmt::Debug for StateTable {
@@ -83,13 +83,13 @@ impl fmt::Debug for StateTable {
             try!(write!(f, "StateTable empty\n"));
         }
         let entries = self.map.entries();
-        fn decode_key(k: usize) -> (Ipv4Addr, u16, u16) {
+        fn decode_key(k: u64) -> (Ipv4Addr, u16, u16) {
             let ip = Ipv4Addr::from((k >> 32) as u32);
             let src_port = ((k & 0xffffffff) >> 16) as u16;
             let dst_port = k as u16;
             (ip, src_port, dst_port)
         }
-        fn decode_val(v: usize) -> ConnState {
+        fn decode_val(v: u64) -> ConnState {
             ConnState::from((v & 0xffffffff) - 1)
         }
         for entry in &entries {
@@ -105,8 +105,8 @@ enum ConnState {
     Closing, // FIN received
 }
 
-impl From<usize> for ConnState {
-    fn from(x: usize) -> Self {
+impl From<u64> for ConnState {
+    fn from(x: u64) -> Self {
         match x {
             0 => ConnState::Established,
             1 => ConnState::Closing,
@@ -125,27 +125,27 @@ impl StateTable {
     }
 
     pub fn set_state(&mut self, ip: Ipv4Addr, source_port: u16, dest_port: u16, ts: u32, state: ConnState) {
-        let int_ip = u32::from(ip) as usize;
-        let key: usize = int_ip << 32
-                         | (source_port as usize) << 16
-                         | dest_port as usize;
-        let val: usize = (ts as usize) << 32 | ((state as usize) + 1);
+        let int_ip = u32::from(ip) as u64;
+        let key: u64 = int_ip << 32
+                         | (source_port as u64) << 16
+                         | dest_port as u64;
+        let val: u64 = (ts as u64) << 32 | ((state as u64) + 1);
         self.map.insert(key, val);
     }
 
     pub fn get_state(&self, ip: Ipv4Addr, source_port: u16, dest_port: u16) -> Option<(u32,ConnState)> {
-        let int_ip = u32::from(ip) as usize;
-        let key: usize = int_ip << 32
-                         | (source_port as usize) << 16
-                         | dest_port as usize;
+        let int_ip = u32::from(ip) as u64;
+        let key: u64 = int_ip << 32
+                         | (source_port as u64) << 16
+                         | dest_port as u64;
         self.map.get(key).map(|val| ((val >> 32) as u32, ConnState::from((val & 0xffffffff) - 1)))
     }
 
     pub fn delete_state(&mut self, ip: Ipv4Addr, source_port: u16, dest_port: u16) {
-        let int_ip = u32::from(ip) as usize;
-        let key: usize = int_ip << 32
-                         | (source_port as usize) << 16
-                         | dest_port as usize;
+        let int_ip = u32::from(ip) as u64;
+        let key: u64 = int_ip << 32
+                         | (source_port as u64) << 16
+                         | dest_port as u64;
         self.map.remove(key);
     }
 }
@@ -369,12 +369,12 @@ fn state_table_gc() {
     const CLOSING_TIMEOUT: u32 = 120;
     const ESTABLISHED_TIMEOUT: u32 = 600;
 
-    fn decode_val(val: usize) -> (ConnState, u32) {
+    fn decode_val(val: u64) -> (ConnState, u32) {
         let ts = (val >> 32) as u32;
         let cs = ConnState::from((val & 0xffffffff) - 1);
         (cs, ts)
     }
-    fn decode_key(k: usize) -> (Ipv4Addr, u16, u16) {
+    fn decode_key(k: u64) -> (Ipv4Addr, u16, u16) {
             let ip = Ipv4Addr::from((k >> 32) as u32);
             let src_port = ((k & 0xffffffff) >> 16) as u16;
             let dst_port = k as u16;
