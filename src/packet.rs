@@ -17,7 +17,7 @@ use ::cookie;
 use ::csum;
 use ::filter;
 use ::filter::FilterAction;
-use ::ConnState;
+use ::state::ConnState;
 
 const MIN_REPLY_BUF_LEN_TS: usize = 74;
 const MIN_REPLY_BUF_LEN: usize = 58;
