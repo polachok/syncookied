@@ -470,7 +470,7 @@ fn handle_signals(path: PathBuf, reload_lock: Arc<(Mutex<bool>, Condvar)>) {
 // TODO: too many parameters, put them into a struct
 fn run(config: PathBuf, rx_iface: &str, tx_iface: &str,
        rx_mac: MacAddr, _tx_mac: MacAddr,
-       qlen: u32, first_cpu: usize,
+       first_cpu: usize,
        uptime_readers: Vec<(Ipv4Addr, Box<UptimeReader>)>,
        metrics_server: Option<&str>) {
     let rx_nm = Arc::new(Mutex::new(NetmapDescriptor::new(rx_iface).unwrap()));
@@ -487,7 +487,7 @@ fn run(config: PathBuf, rx_iface: &str, tx_iface: &str,
         let tx_nm = tx_nm.lock();
         tx_nm.get_tx_rings_count()
     };
-    info!("{} Rx rings @ {}, {} Tx rings @ {} Queue: {}", rx_count, rx_iface, tx_count, tx_iface, qlen);
+    info!("{} Rx rings @ {}, {} Tx rings @ {}", rx_count, rx_iface, tx_count, tx_iface);
     if tx_count < rx_count {
         panic!("We need at least as much Tx rings as Rx rings")
     }
@@ -546,7 +546,7 @@ fn main() {
                                    .help("Interface to receive packets on")
                                    .required(true)
                                    .takes_value(true))
-                               .arg(Arg::with_name("out")
+                              .arg(Arg::with_name("out")
                                    .short("o")
                                    .long("output-interface")
                                    .value_name("iface")
@@ -565,12 +565,6 @@ fn main() {
                                     .long("output-mac")
                                     .value_name("xx:xx:xx:xx:xx:xx")
                                     .help("Output interface mac address")
-                                    .takes_value(true))
-                               .arg(Arg::with_name("qlen")
-                                    .short("N")
-                                    .required(false)
-                                    .long("queue-length")
-                                    .help("Length of buffer queue")
                                     .takes_value(true))
                                .arg(Arg::with_name("cpu")
                                     .short("C")
@@ -606,9 +600,6 @@ fn main() {
                                 .or_else(|| util::get_iface_mac(tx_iface).ok())
                                 .map(|mac| MacAddr::from_str(&mac).expect("Expected valid mac")).unwrap_or(rx_mac);
         let ncpus = util::get_cpu_count();
-        let qlen = matches.value_of("qlen")
-                          .map(|x| u32::from_str(x).expect("Expected number for queue length"))
-                          .unwrap_or(1024 * 1024);
         let cpu = matches.value_of("cpu")
                          .map(|x| usize::from_str(x).expect("Expected cpu number"))
                          .unwrap_or(0);
@@ -622,7 +613,7 @@ fn main() {
                 debug!("Config file {} loaded", config_path.display());
                 let uptime_readers = config;
                 info!("interfaces: [Rx: {}/{}, Tx: {}/{}] Cores: {}", rx_iface, rx_mac, tx_iface, tx_mac, ncpus);
-                run(config_path, rx_iface, tx_iface, rx_mac, tx_mac, qlen, cpu, uptime_readers, metrics_server);
+                run(config_path, rx_iface, tx_iface, rx_mac, tx_mac, cpu, uptime_readers, metrics_server);
             },
             Err(e) => error!("Error parsing config file {}: {:?}", config_path.display(), e),
         }
